@@ -29,7 +29,7 @@ const Review: React.FC<IReviewProps> = ({
 							data-aos-delay={`${delay(index + i, 300, 600, 6000)}`}
 							key={i}
 						/>
-					)
+					),
 				)}
 			</div>
 			<p className="my-3">{text}</p>

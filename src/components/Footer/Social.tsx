@@ -6,13 +6,28 @@ import { contact } from "../../constants"
 const Social: React.FC = () => {
 	return (
 		<div className="d-flex gap-3">
-			<a href={contact.telegram} target="_blank" title="Telegram">
+			<a
+				href={contact.telegram}
+				target="_blank"
+				title="Telegram"
+				className="drop social-drop"
+			>
 				<Telegram className="icon-big" />
 			</a>
-			<a href={contact.linkedIn} target="_blank" title="LinkedIn">
+			<a
+				href={contact.linkedIn}
+				target="_blank"
+				title="LinkedIn"
+				className="drop social-drop"
+			>
 				<LinkedIn className="icon-big" />
 			</a>
-			<a href={contact.github} target="_blank" title="GitHub">
+			<a
+				href={contact.github}
+				target="_blank"
+				title="GitHub"
+				className="drop social-drop"
+			>
 				<GitHub className="icon-big" />
 			</a>
 		</div>

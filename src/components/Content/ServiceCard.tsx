@@ -10,7 +10,7 @@ const ServiceCard: React.FC<IServiceCardProps> = ({
 }) => {
 	return (
 		<Card className="col-lg-6 col-xl-4" index={index}>
-			<div className="icon-container rounded-4">
+			<div className="icon-container drop">
 				<Icon className="icon" />
 			</div>
 			<h3 className="h5 mt-4 mb-2">{name}</h3>

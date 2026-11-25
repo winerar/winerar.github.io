@@ -13,7 +13,7 @@ const Brand = () => {
 				loading="lazy"
 				src={profile.avatar}
 				alt={profile.fullName}
-				className="d-none d-lg-block rounded-circle"
+				className="d-none d-lg-block avatar-drop"
 				width={"216px"}
 				height={"216px"}
 			/>

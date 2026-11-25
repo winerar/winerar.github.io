@@ -1,6 +1,7 @@
 @font-face {
 	font-family: "Jura";
-	src: url("./assets/fonts/subset-Jura-Bold.woff") format("woff"),
+	src:
+		url("./assets/fonts/subset-Jura-Bold.woff") format("woff"),
 		url("./assets/fonts/subset-Jura-Bold.ttf") format("truetype"),
 		url("./assets/fonts/subset-Jura-Bold.svg#Jura-Bold") format("svg");
 	font-weight: bold;
@@ -10,7 +11,8 @@
 
 @font-face {
 	font-family: "Jura";
-	src: url("./assets/fonts/subset-Jura-Regular.woff") format("woff"),
+	src:
+		url("./assets/fonts/subset-Jura-Regular.woff") format("woff"),
 		url("./assets/fonts/subset-Jura-Regular.ttf") format("truetype"),
 		url("./assets/fonts/subset-Jura-Regular.svg#Jura-Regular") format("svg");
 	font-weight: normal;
@@ -20,7 +22,8 @@
 
 @font-face {
 	font-family: "Jura";
-	src: url("./assets/fonts/subset-Jura-SemiBold.woff") format("woff"),
+	src:
+		url("./assets/fonts/subset-Jura-SemiBold.woff") format("woff"),
 		url("./assets/fonts/subset-Jura-SemiBold.ttf") format("truetype"),
 		url("./assets/fonts/subset-Jura-SemiBold.svg#Jura-SemiBold") format("svg");
 	font-weight: 600;
@@ -30,7 +33,8 @@
 
 @font-face {
 	font-family: "Jura";
-	src: url("./assets/fonts/subset-Jura-Light.woff") format("woff"),
+	src:
+		url("./assets/fonts/subset-Jura-Light.woff") format("woff"),
 		url("./assets/fonts/subset-Jura-Light.ttf") format("truetype"),
 		url("./assets/fonts/subset-Jura-Light.svg#Jura-Light") format("svg");
 	font-weight: 300;
@@ -40,7 +44,8 @@
 
 @font-face {
 	font-family: "Jura";
-	src: url("./assets/fonts/subset-Jura-Medium.woff") format("woff"),
+	src:
+		url("./assets/fonts/subset-Jura-Medium.woff") format("woff"),
 		url("./assets/fonts/subset-Jura-Medium.ttf") format("truetype"),
 		url("./assets/fonts/subset-Jura-Medium.svg#Jura-Medium") format("svg");
 	font-weight: 500;
@@ -131,11 +136,16 @@ img {
 }
 
 .shadow-effect:hover {
-	box-shadow: -0.5rem 0.5rem 0 0 var(--color-brand),
+	box-shadow:
+		-0.5rem 0.5rem 0 0 var(--color-brand),
 		-1rem 1rem 0 0 var(--color-base);
 }
 
 .icon-container {
+	box-shadow:
+		inset 0 2px 3px rgba(255, 255, 255, 0.5),
+		inset 0 -4px 8px rgba(90, 0, 45, 0.45),
+		0 0.5rem 1rem -0.5rem rgba(10, 16, 26, 0.6);
 	width: 3.75rem;
 	height: 3.75rem;
 	display: flex;
@@ -178,7 +188,8 @@ img {
 }
 
 .navbar-nav {
-	background: linear-gradient(to left, #405978bb, var(--color-brand)),
+	background:
+		linear-gradient(to left, #405978bb, var(--color-brand)),
 		url("./assets/images/vi-bg.webp");
 	background-size: cover;
 	background-position: top;
@@ -208,7 +219,8 @@ img {
 	.navbar {
 		min-height: 100vh;
 		width: var(--sidebar-width);
-		background: linear-gradient(#405978bb, var(--color-brand)),
+		background:
+			linear-gradient(#405978bb, var(--color-brand)),
 			url("./assets/images/vi-bg.webp");
 		background-size: cover;
 		background-position: center;
@@ -295,4 +307,227 @@ img {
 
 .card-custom:hover .card-custom__image img {
 	transform: scale(1.1);
+}
+
+/* ===================== Прозрачный силикон ===================== */
+/* Форма, деформация и блики считаются в components/common/Liquid/engine.ts */
+
+.liquid {
+	position: relative;
+	height: 100%;
+	isolation: isolate;
+	touch-action: pan-y;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.liquid.is-pressed {
+	user-select: none;
+	cursor: grabbing;
+}
+
+.liquid__inner {
+	position: relative;
+	height: 100%;
+	transform-origin: 50% 50%;
+	will-change: transform;
+}
+
+.liquid__svg {
+	position: absolute;
+	overflow: visible;
+	pointer-events: none;
+}
+
+.liquid__dimple {
+	opacity: 0;
+}
+
+/* до запуска JS (SSG) — простая подложка той же формы */
+.liquid__fallback {
+	position: absolute;
+	inset: 0;
+	border-radius: 24px;
+	background: rgba(36, 51, 69, 0.5);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.liquid.is-ready .liquid__fallback {
+	display: none;
+}
+
+/* тень прозрачного материала: мягкая тень + сфокусированный свет (каустика) */
+.liquid__shadow {
+	position: absolute;
+	inset: 6% 2% -3%;
+	z-index: -1;
+	border-radius: 28px;
+	background:
+		radial-gradient(
+			ellipse 45% 30% at 62% 88%,
+			rgba(255, 120, 190, 0.22),
+			rgba(255, 120, 190, 0) 100%
+		),
+		radial-gradient(
+			ellipse 70% 70% at 50% 55%,
+			rgba(10, 16, 26, 0.5),
+			rgba(10, 16, 26, 0) 100%
+		);
+	filter: blur(14px);
+	pointer-events: none;
+}
+
+.liquid__content {
+	position: relative;
+	height: 100%;
+}
+
+/* картинка «вплавлена» в силикон — отступает от края */
+.liquid .card-custom__image.w-100 {
+	width: auto !important;
+	margin: 0.75rem 0.75rem 0;
+	box-shadow: 0 0.5rem 1rem -0.5rem rgba(10, 16, 26, 0.55);
+}
+
+.liquid .card-custom__image,
+.liquid .card-custom__image img {
+	border-radius: 14px !important;
+}
+
+.liquid .card-custom__image img {
+	transition: transform 0.6s cubic-bezier(0.25, 1.6, 0.45, 1);
+}
+
+/* строки контактов */
+.contact-drops {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 1rem;
+}
+
+.contact-drops > * {
+	max-width: 100%;
+}
+
+.liquid--flat .liquid__content {
+	padding: 0.8rem 1.4rem;
+	overflow-wrap: anywhere;
+}
+
+.liquid--flat .liquid__fallback {
+	border-radius: 999px;
+}
+
+/* --- Мелкие силиконовые элементы: ровные в покое, мнутся при нажатии --- */
+
+.drop,
+.btn-brand,
+.avatar-drop {
+	transition:
+		transform 0.7s cubic-bezier(0.22, 1.9, 0.4, 1),
+		box-shadow 0.3s ease,
+		background 0.3s ease;
+}
+
+.drop:hover,
+.btn-brand:hover {
+	transform: scale(1.06, 0.95);
+}
+
+.drop:active,
+.btn-brand:active {
+	transform: scale(1.16, 0.8);
+	transition-duration: 0.12s;
+	transition-timing-function: ease-out;
+}
+
+/* бейдж: прозрачный розовый силикон */
+.badge.drop {
+	border-radius: 999px;
+	padding: 0.45em 0.85em;
+	color: #fff !important;
+	background: linear-gradient(
+		180deg,
+		rgba(255, 110, 185, 0.75),
+		rgba(255, 1, 131, 0.55) 55%,
+		rgba(200, 0, 105, 0.7)
+	) !important;
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.7),
+		inset 0 0 0 1px rgba(255, 255, 255, 0.15),
+		inset 0 -2px 3px rgba(110, 0, 55, 0.45),
+		0 3px 6px -2px rgba(10, 16, 26, 0.5);
+	text-shadow: 0 1px 1px rgba(110, 0, 55, 0.4);
+}
+
+/* кнопка */
+.btn-brand,
+.btn-brand:focus {
+	border: none;
+	border-radius: 18px;
+	color: #fff;
+	background: linear-gradient(
+		180deg,
+		rgba(255, 110, 185, 0.9),
+		rgba(255, 1, 131, 0.75) 55%,
+		rgba(200, 0, 105, 0.9)
+	);
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.75),
+		inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+		inset 0 -4px 8px rgba(110, 0, 55, 0.45),
+		0 0.75rem 1.5rem -0.75rem rgba(255, 1, 131, 0.7);
+}
+
+.btn-brand:hover {
+	color: #fff;
+	background: linear-gradient(
+		180deg,
+		rgba(255, 130, 195, 0.95),
+		rgba(255, 1, 131, 0.8) 55%,
+		rgba(200, 0, 105, 0.95)
+	);
+}
+
+/* иконки услуг */
+.icon-container.drop {
+	border-radius: 16px;
+}
+
+/* соцсети в футере */
+.social-drop {
+	display: inline-flex;
+	padding: 0.6rem;
+	border-radius: 50%;
+	background: linear-gradient(
+		180deg,
+		rgba(159, 182, 211, 0.22),
+		rgba(36, 51, 69, 0.5) 50%,
+		rgba(24, 34, 47, 0.65)
+	);
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.55),
+		inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+		inset 0 -0.4rem 0.8rem -0.4rem rgba(255, 1, 131, 0.5),
+		0 0.5rem 1rem -0.5rem rgba(10, 16, 26, 0.7);
+}
+
+/* аватар: ровный круг, при нажатии сплющивается */
+.avatar-drop {
+	border-radius: 50%;
+}
+
+.navbar-brand:active .avatar-drop {
+	transform: scale(1.08, 0.9);
+	transition-duration: 0.12s;
+	transition-timing-function: ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.drop,
+	.btn-brand,
+	.avatar-drop {
+		transition: none !important;
+		transform: none !important;
+	}
 }

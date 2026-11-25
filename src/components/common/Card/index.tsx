@@ -1,6 +1,7 @@
 import { ICardComponent } from "../../../types"
 import { delay } from "../../../utils"
 import Image from "./components/Image"
+import Liquid from "../Liquid"
 
 const Card: ICardComponent = ({
 	index = 0,
@@ -14,10 +15,10 @@ const Card: ICardComponent = ({
 			data-aos="fade-up"
 			data-aos-delay={`${delay(index)}`}
 		>
-			<div className="card-custom service bg-base rounded-4 shadow-effect">
+			<Liquid className="card-custom service" seed={index}>
 				{image && <Image src={image.src} alt={image?.alt} />}
 				<div className="p-4">{children}</div>
-			</div>
+			</Liquid>
 		</div>
 	)
 }
