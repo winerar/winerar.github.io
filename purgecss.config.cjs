@@ -4,7 +4,7 @@ module.exports = {
 	css: ["./dist/assets/css/*.css"],
 	output: "./dist/assets/css/",
 	safelist: {
-		standard: [/active/, "navbar-collapse", /collapse/, "collapsing", /show/],
+		standard: [/active/, /^liquid/, "is-visible", /^drop/, "navbar-collapse", /collapse/, "collapsing", /show/],
 		deep: [/^dropdown/, /^modal/, /^carousel/, /collapse/, /navbar/],
 	},
 }
