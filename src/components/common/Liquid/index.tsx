@@ -1,20 +1,21 @@
-import { CSSProperties, ReactNode, useEffect, useId, useRef } from "react"
+import { ReactNode, useEffect, useId, useRef } from "react"
+import { Drop, register, unregister, wake } from "./engine"
 
 interface ILiquidProps {
 	children?: ReactNode
 	className?: string
-	/** Детерминированное «зерно» — разные карточки плавают и рябят по-разному */
+	/** Детерминированное «зерно» — разные капли двигаются по-разному */
 	seed?: number
 	/** Множитель силы эффекта (1 — карточки, меньше — мелкие элементы) */
 	strength?: number
 }
 
+const PAD = 40 // запас вокруг карточки, чтобы край мог выпячиваться
+
 /**
- * Капля воды в невесомости.
- * - сама по себе медленно дрейфует и меняет форму (CSS);
- * - край струится за счёт SVG-шума (feTurbulence + feDisplacementMap);
- * - на курсор слегка тянется и пружинит, по клику расходится рябь.
- * Перетаскивать нельзя: смещение ограничено несколькими пикселями.
+ * Капля воды в невесомости с физикой поверхности (см. engine.ts).
+ * Объём рисуется в SVG: линза, блик, каустика, кольца волн.
+ * Перетаскивать нельзя — только локальные возмущения.
  */
 const Liquid: React.FC<ILiquidProps> = ({
 	children,
@@ -24,202 +25,186 @@ const Liquid: React.FC<ILiquidProps> = ({
 }) => {
 	const rootRef = useRef<HTMLDivElement>(null)
 	const innerRef = useRef<HTMLDivElement>(null)
-	const surfaceRef = useRef<HTMLDivElement>(null)
+	const shadowRef = useRef<HTMLDivElement>(null)
 	const svgRef = useRef<SVGSVGElement>(null)
-	const dispRef = useRef<SVGFEDisplacementMapElement>(null)
-	const filterId = `liquid-${useId().replace(/[^a-zA-Z0-9-]/g, "")}`
+	const uid = useId().replace(/[^a-zA-Z0-9-]/g, "")
+	const id = (name: string) => `lq-${uid}-${name}`
 
 	useEffect(() => {
 		const root = rootRef.current
 		const inner = innerRef.current
-		const surface = surfaceRef.current
+		const shadow = shadowRef.current
 		const svg = svgRef.current
-		const disp = dispRef.current
-		if (!root || !inner || !surface || !svg || !disp) return
+		if (!root || !inner || !shadow || !svg) return
+		const q = <T extends Element>(sel: string) => svg.querySelector(sel) as T
+
+		const drop = new Drop(
+			{
+				inner,
+				shadow,
+				shape: q<SVGPathElement>(".liquid__shape"),
+				glint: q<SVGEllipseElement>(".liquid__glint"),
+				glintSmall: q<SVGEllipseElement>(".liquid__glint-small"),
+				caustic: q<SVGEllipseElement>(".liquid__caustic"),
+				flows: Array.from(
+					svg.querySelectorAll<SVGCircleElement>(".liquid__flow"),
+				),
+				pointerLight: q<SVGCircleElement>(".liquid__pointer"),
+				ripples: q<SVGGElement>(".liquid__ripples"),
+				pad: PAD,
+			},
+			strength,
+			seed,
+		)
+
+		const measure = () => {
+			drop.resize(root.offsetWidth, root.offsetHeight)
+			drop.render(performance.now() / 1000)
+		}
+		measure()
+		root.classList.add("is-ready")
 
 		const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+		const ro = new ResizeObserver(measure)
+		ro.observe(root)
+		if (reduce) return () => ro.disconnect()
 
-		// Пауза всей анимации, пока капля вне экрана
+		register(drop)
 		const io = new IntersectionObserver(([entry]) => {
-			const visible = entry.isIntersecting
-			root.classList.toggle("is-visible", visible)
-			if (visible && !reduce) svg.unpauseAnimations()
-			else svg.pauseAnimations()
+			drop.visible = entry.isIntersecting
+			if (drop.visible) wake()
 		})
 		io.observe(root)
-		if (reduce) {
-			svg.pauseAnimations()
-			return () => io.disconnect()
+
+		let lastT = 0
+		const local = (e: PointerEvent): [number, number] => {
+			const r = root.getBoundingClientRect()
+			return [e.clientX - r.left, e.clientY - r.top]
 		}
-
-		// --- пружинная физика ---
-		const BASE_DISP = 16 * strength
-		const MAX_SHIFT = 10 * strength // px — чтобы не было ощущения перетаскивания
-		let x = 0,
-			y = 0,
-			vx = 0,
-			vy = 0 // смещение к курсору
-		let tx = 0,
-			ty = 0
-		let sq = 0,
-			vsq = 0 // «сплющивание» (желе)
-		let wobble = 0 // дополнительная рябь края
-		let hover = 0,
-			hoverTarget = 0
-		let lastPx = 0,
-			lastPy = 0,
-			lastT = 0
-		let raf = 0
-
-		const tick = () => {
-			// мягкая недодемпфированная пружина → капля колышется
-			vx = (vx + (tx - x) * 0.05) * 0.86
-			vy = (vy + (ty - y) * 0.05) * 0.86
-			x += vx
-			y += vy
-			vsq = (vsq - sq * 0.09) * 0.88
-			sq += vsq
-			hover += (hoverTarget - hover) * 0.08
-			wobble *= 0.95
-
-			inner.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${(1 + sq).toFixed(4)}, ${(1 - sq).toFixed(4)})`
-			disp.setAttribute(
-				"scale",
-				(
-					BASE_DISP +
-					(hover * 10 + wobble + Math.abs(sq) * 320) * strength
-				).toFixed(2),
-			)
-
-			const settled =
-				Math.abs(tx - x) + Math.abs(ty - y) + Math.abs(vx) + Math.abs(vy) <
-					0.02 &&
-				Math.abs(sq) + Math.abs(vsq) < 0.0002 &&
-				Math.abs(hoverTarget - hover) < 0.005 &&
-				wobble < 0.05
-			raf = settled ? 0 : requestAnimationFrame(tick)
-		}
-		const kick = () => {
-			if (!raf) raf = requestAnimationFrame(tick)
-		}
-
 		const onMove = (e: PointerEvent) => {
-			const r = inner.getBoundingClientRect()
-			const nx = (e.clientX - r.left) / r.width
-			const ny = (e.clientY - r.top) / r.height
-			surface.style.setProperty("--mx", `${(nx * 100).toFixed(1)}%`)
-			surface.style.setProperty("--my", `${(ny * 100).toFixed(1)}%`)
-			tx = (nx - 0.5) * 2 * MAX_SHIFT
-			ty = (ny - 0.5) * 2 * MAX_SHIFT
-
-			// резкое движение курсора слегка возмущает поверхность
 			const now = performance.now()
-			if (lastT) {
-				const dt = Math.max(16, now - lastT)
-				const speed = Math.hypot(e.clientX - lastPx, e.clientY - lastPy) / dt
-				wobble = Math.min(20, wobble + speed * 2)
-				vsq += Math.max(
-					-0.002,
-					Math.min(
-						0.002,
-						((e.clientX - lastPx - (e.clientY - lastPy)) / dt) * 0.0012,
-					),
-				)
-			}
-			lastPx = e.clientX
-			lastPy = e.clientY
+			const [x, y] = local(e)
+			drop.pointerMove(x, y, lastT ? (now - lastT) / 1000 : 0)
 			lastT = now
-			kick()
-		}
-		const onEnter = () => {
-			hoverTarget = 1
-			vsq += 0.009
-			lastT = 0
-			kick()
 		}
 		const onLeave = () => {
-			hoverTarget = 0
-			tx = ty = 0
-			vsq -= 0.007
-			kick()
+			drop.pointerLeave()
+			lastT = 0
 		}
 		const onDown = (e: PointerEvent) => {
-			const r = surface.getBoundingClientRect()
-			const ripple = document.createElement("span")
-			ripple.className = "liquid__ripple"
-			const size = Math.max(r.width, r.height) * 1.2
-			ripple.style.width = ripple.style.height = `${size}px`
-			ripple.style.left = `${e.clientX - r.left - size / 2}px`
-			ripple.style.top = `${e.clientY - r.top - size / 2}px`
-			surface.appendChild(ripple)
-			ripple.addEventListener("animationend", () => ripple.remove(), {
-				once: true,
-			})
-			vsq += 0.022
-			wobble = Math.min(30, wobble + 16)
-			kick()
+			const [x, y] = local(e)
+			drop.poke(x, y)
 		}
-
 		root.addEventListener("pointermove", onMove)
-		root.addEventListener("pointerenter", onEnter)
 		root.addEventListener("pointerleave", onLeave)
 		root.addEventListener("pointerdown", onDown)
+
 		return () => {
+			ro.disconnect()
 			io.disconnect()
-			cancelAnimationFrame(raf)
+			unregister(drop)
+			drop.destroy()
 			root.removeEventListener("pointermove", onMove)
-			root.removeEventListener("pointerenter", onEnter)
 			root.removeEventListener("pointerleave", onLeave)
 			root.removeEventListener("pointerdown", onDown)
 		}
-	}, [strength])
-
-	// разные периоды/фазы для каждой капли — без рандома, чтобы SSG совпадал с клиентом
-	const style = {
-		"--float-dur": `${11 + ((seed * 3.7) % 6)}s`,
-		"--float-delay": `${-((seed * 2.3) % 9)}s`,
-		"--morph-dur": `${14 + ((seed * 5.1) % 8)}s`,
-		"--morph-delay": `${-((seed * 4.3) % 12)}s`,
-		"--flow-dur": `${18 + ((seed * 2.9) % 10)}s`,
-	} as CSSProperties
+	}, [seed, strength])
 
 	return (
-		<div ref={rootRef} className={`liquid ${className}`} style={style}>
+		<div ref={rootRef} className={`liquid ${className}`}>
+			<div ref={shadowRef} className="liquid__shadow" aria-hidden="true" />
 			<div ref={innerRef} className="liquid__inner">
-				<div className="liquid__body" style={{ filter: `url(#${filterId})` }} />
-				<div ref={surfaceRef} className="liquid__surface" aria-hidden="true" />
-				<div className="liquid__content">{children}</div>
+				<div className="liquid__fallback" aria-hidden="true" />
 				<svg
 					ref={svgRef}
 					className="liquid__svg"
+					style={{ inset: -PAD }}
 					aria-hidden="true"
 					focusable="false"
 				>
-					<filter id={filterId} x="-15%" y="-15%" width="130%" height="130%">
-						<feTurbulence
-							type="fractalNoise"
-							baseFrequency="0.006 0.009"
-							numOctaves={1}
-							seed={seed + 1}
-							result="noise"
-						>
-							<animate
-								attributeName="baseFrequency"
-								dur={`${16 + (seed % 5) * 2}s`}
-								values="0.006 0.009;0.009 0.006;0.006 0.009"
-								repeatCount="indefinite"
-							/>
-						</feTurbulence>
-						<feDisplacementMap
-							ref={dispRef}
-							in="SourceGraphic"
-							in2="noise"
-							scale={16 * strength}
-							xChannelSelector="R"
-							yChannelSelector="G"
+					<defs>
+						<path id={id("shape")} className="liquid__shape" d="" />
+						<clipPath id={id("clip")}>
+							<use href={`#${id("shape")}`} />
+						</clipPath>
+						{/* толща воды: светлее в центре линзы, темнее к краям */}
+						<radialGradient id={id("body")} cx="0.38" cy="0.3" r="0.85">
+							<stop offset="0" stopColor="#4a6788" stopOpacity="0.62" />
+							<stop offset="0.55" stopColor="#243345" stopOpacity="0.84" />
+							<stop offset="1" stopColor="#141c29" stopOpacity="0.94" />
+						</radialGradient>
+						{/* ободок: френелевское отражение сверху-слева и розовый контровой свет снизу */}
+						<linearGradient id={id("rim")} x1="0" y1="0" x2="1" y2="1">
+							<stop offset="0" stopColor="#fff" stopOpacity="0.75" />
+							<stop offset="0.3" stopColor="#fff" stopOpacity="0.12" />
+							<stop offset="0.65" stopColor="#fff" stopOpacity="0.02" />
+							<stop offset="1" stopColor="#ff0183" stopOpacity="0.55" />
+						</linearGradient>
+						{/* внутренний отсвет у нижнего края — свет, прошедший сквозь толщу */}
+						<linearGradient id={id("inner")} x1="0" y1="0" x2="0.35" y2="1">
+							<stop offset="0" stopColor="#acbdd2" stopOpacity="0.1" />
+							<stop offset="0.5" stopColor="#ff0183" stopOpacity="0" />
+							<stop offset="1" stopColor="#ff0183" stopOpacity="0.32" />
+						</linearGradient>
+						<radialGradient id={id("f0")}>
+							<stop offset="0" stopColor="#ff0183" stopOpacity="0.16" />
+							<stop offset="1" stopColor="#ff0183" stopOpacity="0" />
+						</radialGradient>
+						<radialGradient id={id("f1")}>
+							<stop offset="0" stopColor="#acbdd2" stopOpacity="0.12" />
+							<stop offset="1" stopColor="#acbdd2" stopOpacity="0" />
+						</radialGradient>
+						<radialGradient id={id("f2")}>
+							<stop offset="0" stopColor="#5b7ea8" stopOpacity="0.28" />
+							<stop offset="1" stopColor="#5b7ea8" stopOpacity="0" />
+						</radialGradient>
+						<radialGradient id={id("ptr")}>
+							<stop offset="0" stopColor="#fff" stopOpacity="0.13" />
+							<stop offset="1" stopColor="#fff" stopOpacity="0" />
+						</radialGradient>
+						<radialGradient id={id("glint")}>
+							<stop offset="0" stopColor="#fff" stopOpacity="0.9" />
+							<stop offset="0.5" stopColor="#fff" stopOpacity="0.45" />
+							<stop offset="1" stopColor="#fff" stopOpacity="0" />
+						</radialGradient>
+						<radialGradient id={id("caustic")}>
+							<stop offset="0" stopColor="#ff8cc6" stopOpacity="0.55" />
+							<stop offset="0.6" stopColor="#ff0183" stopOpacity="0.18" />
+							<stop offset="1" stopColor="#ff0183" stopOpacity="0" />
+						</radialGradient>
+					</defs>
+
+					<use href={`#${id("shape")}`} fill={`url(#${id("body")})`} />
+					<g clipPath={`url(#${id("clip")})`}>
+						<circle className="liquid__flow" r="0" fill={`url(#${id("f0")})`} />
+						<circle className="liquid__flow" r="0" fill={`url(#${id("f1")})`} />
+						<circle className="liquid__flow" r="0" fill={`url(#${id("f2")})`} />
+						<circle
+							className="liquid__pointer"
+							r="170"
+							fill={`url(#${id("ptr")})`}
 						/>
-					</filter>
+						<g fill="none" stroke={`url(#${id("inner")})`}>
+							<use href={`#${id("shape")}`} strokeWidth="34" opacity="0.35" />
+							<use href={`#${id("shape")}`} strokeWidth="18" opacity="0.5" />
+							<use href={`#${id("shape")}`} strokeWidth="7" opacity="0.7" />
+						</g>
+						<ellipse
+							className="liquid__caustic"
+							fill={`url(#${id("caustic")})`}
+						/>
+						<g className="liquid__ripples" />
+					</g>
+					<use
+						href={`#${id("shape")}`}
+						fill="none"
+						stroke={`url(#${id("rim")})`}
+						strokeWidth="1.6"
+					/>
+					<ellipse className="liquid__glint" fill={`url(#${id("glint")})`} />
+					<ellipse className="liquid__glint-small" fill="#fff" opacity="0.85" />
 				</svg>
+				<div className="liquid__content">{children}</div>
 			</div>
 		</div>
 	)
