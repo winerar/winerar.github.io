@@ -5,6 +5,8 @@ interface ILiquidProps {
 	className?: string
 	/** Детерминированное «зерно» — разные карточки плавают и рябят по-разному */
 	seed?: number
+	/** Множитель силы эффекта (1 — карточки, меньше — мелкие элементы) */
+	strength?: number
 }
 
 /**
@@ -14,7 +16,12 @@ interface ILiquidProps {
  * - на курсор слегка тянется и пружинит, по клику расходится рябь.
  * Перетаскивать нельзя: смещение ограничено несколькими пикселями.
  */
-const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) => {
+const Liquid: React.FC<ILiquidProps> = ({
+	children,
+	className = "",
+	seed = 0,
+	strength = 1,
+}) => {
 	const rootRef = useRef<HTMLDivElement>(null)
 	const innerRef = useRef<HTMLDivElement>(null)
 	const surfaceRef = useRef<HTMLDivElement>(null)
@@ -46,14 +53,22 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 		}
 
 		// --- пружинная физика ---
-		const BASE_DISP = 10
-		const MAX_SHIFT = 6 // px — чтобы не было ощущения перетаскивания
-		let x = 0, y = 0, vx = 0, vy = 0 // смещение к курсору
-		let tx = 0, ty = 0
-		let sq = 0, vsq = 0 // «сплющивание» (желе)
+		const BASE_DISP = 16 * strength
+		const MAX_SHIFT = 10 * strength // px — чтобы не было ощущения перетаскивания
+		let x = 0,
+			y = 0,
+			vx = 0,
+			vy = 0 // смещение к курсору
+		let tx = 0,
+			ty = 0
+		let sq = 0,
+			vsq = 0 // «сплющивание» (желе)
 		let wobble = 0 // дополнительная рябь края
-		let hover = 0, hoverTarget = 0
-		let lastPx = 0, lastPy = 0, lastT = 0
+		let hover = 0,
+			hoverTarget = 0
+		let lastPx = 0,
+			lastPy = 0,
+			lastT = 0
 		let raf = 0
 
 		const tick = () => {
@@ -70,11 +85,15 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 			inner.style.transform = `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) scale(${(1 + sq).toFixed(4)}, ${(1 - sq).toFixed(4)})`
 			disp.setAttribute(
 				"scale",
-				(BASE_DISP + hover * 6 + wobble + Math.abs(sq) * 220).toFixed(2)
+				(
+					BASE_DISP +
+					(hover * 10 + wobble + Math.abs(sq) * 320) * strength
+				).toFixed(2),
 			)
 
 			const settled =
-				Math.abs(tx - x) + Math.abs(ty - y) + Math.abs(vx) + Math.abs(vy) < 0.02 &&
+				Math.abs(tx - x) + Math.abs(ty - y) + Math.abs(vx) + Math.abs(vy) <
+					0.02 &&
 				Math.abs(sq) + Math.abs(vsq) < 0.0002 &&
 				Math.abs(hoverTarget - hover) < 0.005 &&
 				wobble < 0.05
@@ -98,8 +117,14 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 			if (lastT) {
 				const dt = Math.max(16, now - lastT)
 				const speed = Math.hypot(e.clientX - lastPx, e.clientY - lastPy) / dt
-				wobble = Math.min(14, wobble + speed * 1.5)
-				vsq += Math.max(-0.002, Math.min(0.002, ((e.clientX - lastPx) - (e.clientY - lastPy)) / dt * 0.0012))
+				wobble = Math.min(20, wobble + speed * 2)
+				vsq += Math.max(
+					-0.002,
+					Math.min(
+						0.002,
+						((e.clientX - lastPx - (e.clientY - lastPy)) / dt) * 0.0012,
+					),
+				)
 			}
 			lastPx = e.clientX
 			lastPy = e.clientY
@@ -108,14 +133,14 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 		}
 		const onEnter = () => {
 			hoverTarget = 1
-			vsq += 0.006
+			vsq += 0.009
 			lastT = 0
 			kick()
 		}
 		const onLeave = () => {
 			hoverTarget = 0
 			tx = ty = 0
-			vsq -= 0.005
+			vsq -= 0.007
 			kick()
 		}
 		const onDown = (e: PointerEvent) => {
@@ -127,9 +152,11 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 			ripple.style.left = `${e.clientX - r.left - size / 2}px`
 			ripple.style.top = `${e.clientY - r.top - size / 2}px`
 			surface.appendChild(ripple)
-			ripple.addEventListener("animationend", () => ripple.remove(), { once: true })
-			vsq += 0.014
-			wobble = Math.min(20, wobble + 10)
+			ripple.addEventListener("animationend", () => ripple.remove(), {
+				once: true,
+			})
+			vsq += 0.022
+			wobble = Math.min(30, wobble + 16)
 			kick()
 		}
 
@@ -145,7 +172,7 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 			root.removeEventListener("pointerleave", onLeave)
 			root.removeEventListener("pointerdown", onDown)
 		}
-	}, [])
+	}, [strength])
 
 	// разные периоды/фазы для каждой капли — без рандома, чтобы SSG совпадал с клиентом
 	const style = {
@@ -162,8 +189,13 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 				<div className="liquid__body" style={{ filter: `url(#${filterId})` }} />
 				<div ref={surfaceRef} className="liquid__surface" aria-hidden="true" />
 				<div className="liquid__content">{children}</div>
-				<svg ref={svgRef} className="liquid__svg" aria-hidden="true" focusable="false">
-					<filter id={filterId} x="-10%" y="-10%" width="120%" height="120%">
+				<svg
+					ref={svgRef}
+					className="liquid__svg"
+					aria-hidden="true"
+					focusable="false"
+				>
+					<filter id={filterId} x="-15%" y="-15%" width="130%" height="130%">
 						<feTurbulence
 							type="fractalNoise"
 							baseFrequency="0.006 0.009"
@@ -182,7 +214,7 @@ const Liquid: React.FC<ILiquidProps> = ({ children, className = "", seed = 0 }) 
 							ref={dispRef}
 							in="SourceGraphic"
 							in2="noise"
-							scale={10}
+							scale={16 * strength}
 							xChannelSelector="R"
 							yChannelSelector="G"
 						/>
