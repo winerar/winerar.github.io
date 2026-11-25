@@ -1,59 +1,73 @@
 /**
- * Физика «капли в невесомости».
+ * Физика «прозрачного силикона».
  *
- * Контур капли — N точек на скруглённом прямоугольнике. Каждая точка может
- * смещаться только по нормали (d), и для этих смещений решается волновое
- * уравнение с затуханием:
+ * В покое компонент — ровный скруглённый прямоугольник. Контур — N точек,
+ * у каждой есть двумерное смещение o = (ox, oy) от исходного положения:
  *
- *   d'' = -K·d + T·(d[i-1] + d[i+1] - 2d[i]) - C·d' + F
+ *   o'' = K·(target − o) + T·(o[i−1] + o[i+1] − 2·o[i]) − C·o'
  *
- *   K — упругость (поверхностное натяжение тянет к исходной форме)
- *   T — связь соседей: по краю бегут волны
- *   C — вязкость
- *   F — внешние силы: потоки воздуха, курсор, волны от клика, инерция при скролле
+ *   K — упругость материала (тянет к исходной форме)
+ *   T — связность: соседние участки деформируются вместе, без «ряби»
+ *   C — вязкость: после отпускания 1–2 затухающих колебания, как у силикона
  *
- * После каждого шага из смещений вычитается среднее — жидкость несжимаема:
- * где край вдавили, в другом месте он выпячивается.
- * Сама капля целиком — масса на пружине: дрейфует, отстаёт при скролле.
+ * target — куда материал «хочет» сместиться под действием пальца:
+ *   • нажатие — плита сплющивается, материал растекается в стороны;
+ *   • нажатие + протягивание — материал вокруг точки захвата тянется за курсором;
+ *   • наведение у края — край слегка подаётся к курсору.
+ * Площадь (объём) поддерживается: если один бок вытянули, остальные поджимаются.
+ * Сам компонент никуда не уезжает — сдвиг ограничен несколькими пикселями.
  */
 
 const SUBSTEP = 1 / 120
-const K = 60
-const C = 2.2
-const WAVE_SPEED = 700 // px/s — скорость волн по краю
-const RIPPLE_SPEED = 520 // px/s — скорость кругов на поверхности
-const BODY_K = 8
-const BODY_C = 2.0
+const K = 170
+const C = 15
+const COUPLING_SPEED = 320 // px/s — насколько «гладко» деформация расходится по краю
 
-// свет падает сверху-слева: блик там, каустика — с противоположной стороны
-const LX = -0.55
-const LY = -0.835
-
-export interface DropElements {
+export interface SiliconeElements {
 	inner: HTMLElement
+	content: HTMLElement
 	shadow: HTMLElement
 	shape: SVGPathElement
 	glint: SVGEllipseElement
-	glintSmall: SVGEllipseElement
-	caustic: SVGEllipseElement
-	flows: SVGCircleElement[]
-	pointerLight: SVGCircleElement
-	ripples: SVGGElement
+	sparkle: SVGEllipseElement
+	edgeGlow: SVGEllipseElement
+	sheen: SVGCircleElement
+	dimple: SVGGElement
+	lens: SVGFEImageElement
+	lensMap: SVGFEDisplacementMapElement
+	lensFilterId: string
 	pad: number
 }
 
-interface Ripple {
-	x: number
-	y: number
-	age: number
-	life: number
-	ring: SVGCircleElement
-	glow: SVGCircleElement
-}
+type Arr =
+	| "rx"
+	| "ry"
+	| "nx"
+	| "ny"
+	| "ox"
+	| "oy"
+	| "vx"
+	| "vy"
+	| "tx"
+	| "ty"
+	| "px"
+	| "py"
+const ARRS: Arr[] = [
+	"rx",
+	"ry",
+	"nx",
+	"ny",
+	"ox",
+	"oy",
+	"vx",
+	"vy",
+	"tx",
+	"ty",
+	"px",
+	"py",
+]
 
-const SVG_NS = "http://www.w3.org/2000/svg"
-
-export class Drop {
+export class Silicone {
 	visible = false
 	private n = 0
 	private w = 0
@@ -63,71 +77,65 @@ export class Drop {
 	private ry = new Float32Array(0)
 	private nx = new Float32Array(0)
 	private ny = new Float32Array(0)
-	private th = new Float32Array(0)
-	private d = new Float32Array(0)
-	private v = new Float32Array(0)
+	private ox = new Float32Array(0)
+	private oy = new Float32Array(0)
+	private vx = new Float32Array(0)
+	private vy = new Float32Array(0)
+	private tx = new Float32Array(0)
+	private ty = new Float32Array(0)
 	private px = new Float32Array(0)
 	private py = new Float32Array(0)
 
-	private bx = 0
-	private by = 0
-	private bvx = 0
-	private bvy = 0
+	// пружины «целого» компонента
+	private press = 0 // глубина нажатия 0..1 (с перелётом при отпускании)
+	private pressV = 0
+	private pressTarget = 0
+	private dragX = 0 // вытягивание (px), сглаженное пружиной
+	private dragY = 0
+	private dragVX = 0
+	private dragVY = 0
 	private hover = 0
 	private hoverTarget = 0
+
 	private ptrOn = false
 	private ptrX = 0
 	private ptrY = 0
-	private ptrVX = 0
-	private ptrVY = 0
-	private ripples: Ripple[] = []
-	private ph: number[]
+	private grabX = 0
+	private grabY = 0
+	private pressed = false
+	private lensOn = false
+	private active = true
 
 	constructor(
-		private els: DropElements,
+		private els: SiliconeElements,
 		private strength: number,
-		seed: number,
-	) {
-		// детерминированные фазы — у каждой капли свой характер
-		this.ph = Array.from(
-			{ length: 10 },
-			(_, i) => ((seed + 1) * 2.399 * (i + 1)) % (Math.PI * 2),
-		)
-	}
+	) {}
 
 	resize(w: number, h: number) {
 		if (w < 2 || h < 2) return
 		if (Math.abs(w - this.w) < 0.5 && Math.abs(h - this.h) < 0.5) return
 		this.w = w
 		this.h = h
-		const R = Math.min(28, w / 2, h / 2)
+		const R = Math.min(24, w / 2, h / 2)
 		const L = 2 * (w - 2 * R) + 2 * (h - 2 * R) + 2 * Math.PI * R
-		const n = Math.max(24, Math.min(128, Math.round(L / 14)))
-		const spacing = L / n
-		this.T = (WAVE_SPEED / spacing) ** 2
+		const n = Math.max(32, Math.min(160, Math.round(L / 10)))
+		this.T = (COUPLING_SPEED / (L / n)) ** 2
 		if (n !== this.n) {
 			this.n = n
-			this.rx = new Float32Array(n)
-			this.ry = new Float32Array(n)
-			this.nx = new Float32Array(n)
-			this.ny = new Float32Array(n)
-			this.th = new Float32Array(n)
-			this.d = new Float32Array(n)
-			this.v = new Float32Array(n)
-			this.px = new Float32Array(n)
-			this.py = new Float32Array(n)
+			for (const k of ARRS) this[k] = new Float32Array(n)
 		}
+		const q = (Math.PI * R) / 2
 		const segs: Array<
 			[number, (u: number) => [number, number, number, number]]
 		> = [
 			[w - 2 * R, (u) => [R + u, 0, 0, -1]],
-			[(Math.PI * R) / 2, (u) => arc(w - R, R, R, -Math.PI / 2 + u / R)],
+			[q, (u) => arc(w - R, R, R, -Math.PI / 2 + u / R)],
 			[h - 2 * R, (u) => [w, R + u, 1, 0]],
-			[(Math.PI * R) / 2, (u) => arc(w - R, h - R, R, u / R)],
+			[q, (u) => arc(w - R, h - R, R, u / R)],
 			[w - 2 * R, (u) => [w - R - u, h, 0, 1]],
-			[(Math.PI * R) / 2, (u) => arc(R, h - R, R, Math.PI / 2 + u / R)],
+			[q, (u) => arc(R, h - R, R, Math.PI / 2 + u / R)],
 			[h - 2 * R, (u) => [0, h - R - u, -1, 0]],
-			[(Math.PI * R) / 2, (u) => arc(R, R, R, Math.PI + u / R)],
+			[q, (u) => arc(R, R, R, Math.PI + u / R)],
 		]
 		for (let i = 0; i < n; i++) {
 			let s = (i / n) * L
@@ -141,179 +149,195 @@ export class Drop {
 			this.ry[i] = y
 			this.nx[i] = nx
 			this.ny[i] = ny
-			this.th[i] = (i / n) * Math.PI * 2
 		}
+		this.active = true
 	}
 
-	pointerMove(x: number, y: number, dt: number) {
-		if (this.ptrOn && dt > 0) {
-			this.ptrVX = (x - this.bx - this.ptrX) / dt
-			this.ptrVY = (y - this.by - this.ptrY) / dt
-		}
-		this.ptrX = x - this.bx
-		this.ptrY = y - this.by
+	pointerMove(x: number, y: number) {
+		this.ptrX = x
+		this.ptrY = y
 		this.ptrOn = true
 		this.hoverTarget = 1
+		this.active = true
 	}
 
 	pointerLeave() {
 		this.ptrOn = false
 		this.hoverTarget = 0
+		this.active = true
 	}
 
-	poke(x: number, y: number) {
-		const lx = x - this.bx
-		const ly = y - this.by
-		const ring = document.createElementNS(SVG_NS, "circle")
-		ring.setAttribute("class", "liquid__ring")
-		const glow = document.createElementNS(SVG_NS, "circle")
-		glow.setAttribute("class", "liquid__ring-glow")
-		this.els.ripples.append(glow, ring)
-		const far = Math.max(
-			Math.hypot(lx, ly),
-			Math.hypot(this.w - lx, ly),
-			Math.hypot(lx, this.h - ly),
-			Math.hypot(this.w - lx, this.h - ly),
-		)
-		this.ripples.push({
-			x: lx,
-			y: ly,
-			age: 0,
-			life: far / RIPPLE_SPEED + 0.6,
-			ring,
-			glow,
-		})
-		if (this.ripples.length > 4) this.dropRipple(0)
-		// толчок: капля отплывает от точки касания
-		const cx = this.w / 2
-		const cy = this.h / 2
-		const len = Math.hypot(cx - lx, cy - ly) || 1
-		this.bvx += ((cx - lx) / len) * 40 * this.strength
-		this.bvy += ((cy - ly) / len) * 40 * this.strength
+	pointerDown(x: number, y: number) {
+		this.grabX = x
+		this.grabY = y
+		this.ptrX = x
+		this.ptrY = y
+		this.pressed = true
+		this.pressTarget = 1
+		this.active = true
 	}
 
-	private dropRipple(i: number) {
-		const r = this.ripples[i]
-		r.ring.remove()
-		r.glow.remove()
-		this.ripples.splice(i, 1)
+	pointerUp() {
+		this.pressed = false
+		this.pressTarget = 0
+		this.active = true
 	}
 
-	step(frameDt: number, t: number, scrollAcc: number) {
+	get busy() {
+		return this.active
+	}
+
+	step(frameDt: number, scrollAcc: number) {
 		const n = this.n
 		if (!n) return
+		const jolt = Math.abs(scrollAcc) > 1500
+		if (!this.active && !jolt) return
+		this.active = true
 		const s = this.strength
-		const { rx, ry, nx, ny, th, d, v, ph } = this
+		const { rx, ry, nx, ny, ox, oy, vx, vy, tx, ty } = this
 		const T = this.T
-		const inertia = clamp(scrollAcc * 0.0006, -7, 7) * s
-		const sigma2 = 2 * 70 * 70
+		const size = Math.max(this.w, this.h)
 
-		this.hover += (this.hoverTarget - this.hover) * Math.min(1, frameDt * 5)
+		this.hover += (this.hoverTarget - this.hover) * Math.min(1, frameDt * 8)
 
-		// след от движения курсора — жидкость увлекается за пальцем
-		if (this.ptrOn) {
-			const kick = 0.00004 * s
-			for (let i = 0; i < n; i++) {
-				const dx = this.ptrX - rx[i]
-				const dy = this.ptrY - ry[i]
-				const g = Math.exp(-(dx * dx + dy * dy) / sigma2)
-				if (g < 0.01) continue
-				v[i] += clamp(
-					(this.ptrVX * nx[i] + this.ptrVY * ny[i]) * kick * g * 60,
-					-40,
-					40,
-				)
+		// вытягивание: материал вокруг точки захвата следует за курсором (с пределом)
+		let wantX = 0
+		let wantY = 0
+		if (this.pressed) {
+			wantX = this.ptrX - this.grabX
+			wantY = this.ptrY - this.grabY
+			const len = Math.hypot(wantX, wantY)
+			const max = 70 * s
+			if (len > 0) {
+				// чем сильнее тянешь, тем туже идёт (нелинейная жёсткость)
+				const eased = max * Math.tanh(len / (max * 1.4))
+				wantX *= eased / len
+				wantY *= eased / len
 			}
 		}
-		this.ptrVX *= 0.8
-		this.ptrVY *= 0.8
 
 		const steps = Math.max(1, Math.round(frameDt / SUBSTEP))
 		const dt = frameDt / steps
+		const sigGrab2 = 2 * (Math.min(size * 0.45, 190) * Math.max(0.6, s)) ** 2
+		const sigPtr2 = 2 * 55 * 55
+		const sigPress2 = 2 * (size * 0.55) ** 2
+		const inertia = Math.max(-4, Math.min(4, scrollAcc * 0.00025)) * s
+
 		for (let k = 0; k < steps; k++) {
-			const tt = t + k * dt
-			// медленные «течения воздуха» — низкие моды формы
-			const a2 = 3.0 * s
-			const a3 = 2.2 * s
-			const a4 = 1.4 * s
-			const a9 = 0.6 * s
-			let mean = 0
+			// пружины целого
+			this.pressV +=
+				(300 * (this.pressTarget - this.press) - 20 * this.pressV) * dt
+			this.press += this.pressV * dt
+			this.dragVX += (220 * (wantX - this.dragX) - 19 * this.dragVX) * dt
+			this.dragVY += (220 * (wantY - this.dragY) - 19 * this.dragVY) * dt
+			this.dragX += this.dragVX * dt
+			this.dragY += this.dragVY * dt
+
+			const spread = 7 * s * this.press // растекание при нажатии
+			let spreadMean = 0
 			for (let i = 0; i < n; i++) {
-				const prev = d[(i - 1 + n) % n]
-				const next = d[(i + 1) % n]
-				const lap = prev + next - 2 * d[i]
-				let target =
-					a2 * Math.sin(2 * th[i] + 0.35 * tt + ph[0]) +
-					a3 * Math.sin(3 * th[i] - 0.27 * tt + ph[1]) +
-					a4 * Math.sin(4 * th[i] + 0.5 * tt + ph[2]) +
-					a9 * Math.sin(9 * th[i] + 1.7 * tt + ph[3])
-				// инерция: при ускорении страницы жидкость «стекает» назад
-				target += inertia * ny[i]
-				if (this.ptrOn) {
+				let gx = 0
+				let gy = 0
+				const dxp = rx[i] - this.grabX
+				const dyp = ry[i] - this.grabY
+				const d2 = dxp * dxp + dyp * dyp
+				// нажатие: плита сплющивается и растекается, сильнее всего у пальца
+				if (this.press !== 0) {
+					const sp = spread * (0.35 + 0.65 * Math.exp(-d2 / sigPress2))
+					gx += nx[i] * sp
+					gy += ny[i] * sp
+					spreadMean += sp
+				}
+				// протягивание
+				if (this.dragX !== 0 || this.dragY !== 0) {
+					const g = Math.exp(-d2 / sigGrab2)
+					gx += this.dragX * g
+					gy += this.dragY * g
+				}
+				// наведение: край чуть подаётся к курсору
+				if (this.ptrOn && !this.pressed) {
 					const dx = this.ptrX - rx[i]
 					const dy = this.ptrY - ry[i]
-					target += 9 * s * this.hover * Math.exp(-(dx * dx + dy * dy) / sigma2)
+					const g =
+						Math.exp(-(dx * dx + dy * dy) / sigPtr2) * 3 * s * this.hover
+					gx += nx[i] * g
+					gy += ny[i] * g
 				}
-				for (const r of this.ripples) {
-					const dist = Math.hypot(rx[i] - r.x, ry[i] - r.y)
-					const dd = dist - r.age * RIPPLE_SPEED
-					if (dd > -40 && dd < 40) {
-						target +=
-							14 * s * Math.exp(-(dd * dd) / 200) * Math.exp(-r.age * 1.2)
-					}
-				}
-				const acc = K * (target - d[i]) + T * lap - C * v[i]
-				v[i] += acc * dt
+				// инерция при скролле: лёгкое «приседание»
+				gy += inertia * Math.abs(ny[i]) * ny[i]
+				tx[i] = gx
+				ty[i] = gy
 			}
+			spreadMean /= n
+
 			for (let i = 0; i < n; i++) {
-				d[i] += v[i] * dt
-				mean += d[i]
+				const a = (i - 1 + n) % n
+				const b = (i + 1) % n
+				vx[i] +=
+					(K * (tx[i] - ox[i]) + T * (ox[a] + ox[b] - 2 * ox[i]) - C * vx[i]) *
+					dt
+				vy[i] +=
+					(K * (ty[i] - oy[i]) + T * (oy[a] + oy[b] - 2 * oy[i]) - C * vy[i]) *
+					dt
 			}
-			// несжимаемость: объём сохраняется
-			mean /= n
-			for (let i = 0; i < n; i++) d[i] = clamp(d[i] - mean, -18, 18)
-
-			// капля целиком: масса на пружине
-			const tx =
-				s *
-					5 *
-					(Math.sin(0.29 * tt + ph[4]) + 0.6 * Math.sin(0.13 * tt + ph[5])) +
-				(this.ptrOn
-					? ((this.ptrX - this.w / 2) / this.w) * 14 * s * this.hover
-					: 0)
-			const ty =
-				s *
-					7 *
-					(Math.sin(0.23 * tt + ph[6]) + 0.5 * Math.sin(0.41 * tt + ph[7])) +
-				(this.ptrOn
-					? ((this.ptrY - this.h / 2) / this.h) * 14 * s * this.hover
-					: 0)
-			this.bvx += (BODY_K * (tx - this.bx) - BODY_C * this.bvx) * dt
-			this.bvy +=
-				(BODY_K * (ty - this.by) -
-					BODY_C * this.bvy +
-					clamp(scrollAcc * 0.012, -160, 160) * s) *
-				dt
-			this.bx += this.bvx * dt
-			this.by += this.bvy * dt
+			let normalMean = 0
+			for (let i = 0; i < n; i++) {
+				ox[i] += vx[i] * dt
+				oy[i] += vy[i] * dt
+				normalMean += ox[i] * nx[i] + oy[i] * ny[i]
+			}
+			// сохранение объёма: средний выход по нормали = только растекание от нажатия
+			const corr = (normalMean / n - spreadMean) * 0.35
+			for (let i = 0; i < n; i++) {
+				ox[i] -= nx[i] * corr
+				oy[i] -= ny[i] * corr
+			}
 		}
 
-		for (let i = this.ripples.length - 1; i >= 0; i--) {
-			this.ripples[i].age += frameDt
-			if (this.ripples[i].age > this.ripples[i].life) this.dropRipple(i)
+		// покой — перестаём считать, форма снова идеально ровная
+		let energy =
+			Math.abs(this.press - this.pressTarget) +
+			Math.abs(this.pressV) +
+			Math.abs(this.dragX - wantX) +
+			Math.abs(this.dragY - wantY) +
+			Math.abs(this.dragVX) +
+			Math.abs(this.dragVY) +
+			Math.abs(this.hover - this.hoverTarget)
+		for (let i = 0; i < n; i += 4) {
+			energy +=
+				Math.abs(vx[i]) +
+				Math.abs(vy[i]) +
+				Math.abs(ox[i] - tx[i]) +
+				Math.abs(oy[i] - ty[i])
+		}
+		if (energy < 0.03 && !this.pressed && !jolt) {
+			if (!this.ptrOn) {
+				ox.fill(0)
+				oy.fill(0)
+				vx.fill(0)
+				vy.fill(0)
+				this.press =
+					this.pressV =
+					this.dragX =
+					this.dragY =
+					this.dragVX =
+					this.dragVY =
+						0
+			}
+			this.active = false
 		}
 
-		this.render(t)
+		this.render()
 	}
 
-	render(t: number) {
+	render() {
 		const n = this.n
 		if (!n) return
-		const { rx, ry, nx, ny, d, px, py } = this
+		const { rx, ry, ox, oy, px, py } = this
 		const pad = this.els.pad
 		for (let i = 0; i < n; i++) {
-			px[i] = rx[i] + nx[i] * d[i] + pad
-			py[i] = ry[i] + ny[i] * d[i] + pad
+			px[i] = rx[i] + ox[i] + pad
+			py[i] = ry[i] + oy[i] + pad
 		}
 
 		// замкнутый сплайн Катмулла–Рома → кубические кривые Безье
@@ -329,67 +353,85 @@ export class Drop {
 		}
 		this.els.shape.setAttribute("d", path + "Z")
 
-		// блик и каустика скользят по реальному (деформированному) краю
-		this.placeHighlight(this.els.glint, LX, LY, 9, 30, 4.5, 40)
-		this.placeHighlight(this.els.glintSmall, LX, LY, 15, 5, 2, 40, 30)
-		this.placeHighlight(
-			this.els.caustic,
-			-LX,
-			-LY,
-			16,
-			Math.min(120, this.w * 0.28),
-			16,
-			6,
+		// блики живут на реальном (деформированном) крае; свет — сверху-слева
+		this.placeOnEdge(
+			this.els.glint,
+			-0.2,
+			-0.98,
+			4,
+			Math.max(16, this.w * 0.3),
+			2,
+			30,
+		)
+		this.placeOnEdge(this.els.sparkle, -0.62, -0.78, 6, 8, 1.5, 60)
+		this.placeOnEdge(
+			this.els.edgeGlow,
+			0.25,
+			0.97,
+			4,
+			Math.max(16, this.w * 0.3),
+			3.5,
+			20,
 		)
 
-		const [f0, f1, f2] = this.els.flows
-		const w = this.w
-		const h = this.h
-		const ph = this.ph
-		setCircle(
-			f0,
-			pad + w * (0.5 + 0.35 * Math.sin(0.11 * t + ph[8])),
-			pad + h * (0.5 + 0.3 * Math.cos(0.17 * t + ph[9])),
-		)
-		setCircle(
-			f1,
-			pad + w * (0.5 + 0.35 * Math.cos(0.09 * t + ph[1])),
-			pad + h * (0.5 + 0.35 * Math.sin(0.13 * t + ph[2])),
-		)
-		setCircle(
-			f2,
-			pad + w * (0.5 + 0.3 * Math.sin(0.07 * t + ph[3])),
-			pad + h * (0.5 + 0.3 * Math.sin(0.19 * t + ph[4])),
-		)
-		const fr = (Math.max(w, h) * 0.5).toFixed(0)
-		f0.setAttribute("r", fr)
-		f1.setAttribute("r", fr)
-		f2.setAttribute("r", fr)
+		const p = Math.max(0, this.press)
+		const lift = this.hover * (1 - Math.min(1, p))
 
-		const pl = this.els.pointerLight
-		setCircle(pl, this.ptrX + pad, this.ptrY + pad)
-		pl.style.opacity = (this.hover * 0.9).toFixed(3)
+		// блеск поверхности под курсором
+		const sh = this.els.sheen
+		sh.setAttribute("cx", (this.ptrX + pad).toFixed(1))
+		sh.setAttribute("cy", (this.ptrY + pad).toFixed(1))
+		sh.style.opacity = (this.hover * (1 - Math.min(1, p)) * 0.8).toFixed(3)
 
-		for (const r of this.ripples) {
-			const rad = Math.max(0.1, r.age * RIPPLE_SPEED)
-			const fade = Math.max(0, 1 - r.age / r.life)
-			setCircle(r.ring, r.x + pad, r.y + pad)
-			setCircle(r.glow, r.x + pad, r.y + pad)
-			r.ring.setAttribute("r", rad.toFixed(1))
-			r.glow.setAttribute("r", Math.max(0.1, rad - 7).toFixed(1))
-			r.ring.style.opacity = (fade * 0.55).toFixed(3)
-			r.glow.style.opacity = (fade * 0.5).toFixed(3)
+		// вмятина под пальцем: тянется вдоль направления протягивания
+		const dl = Math.hypot(this.dragX, this.dragY)
+		const ang = (Math.atan2(this.dragY, this.dragX) * 180) / Math.PI
+		const stretch = 1 + dl / 70
+		const cx = this.grabX + this.dragX * 0.6
+		const cy = this.grabY + this.dragY * 0.6
+		this.els.dimple.setAttribute(
+			"transform",
+			`translate(${(cx + pad).toFixed(1)} ${(cy + pad).toFixed(1)}) rotate(${ang.toFixed(1)}) scale(${stretch.toFixed(3)} ${(1 / Math.sqrt(stretch)).toFixed(3)})`,
+		)
+		this.els.dimple.style.opacity = Math.min(
+			1,
+			Math.abs(this.press) * 1.2,
+		).toFixed(3)
+
+		// преломление: содержимое под пальцем искажается, как сквозь вдавленную линзу
+		const lensScale = p * 16 * this.strength
+		if (lensScale > 0.3) {
+			const r = 90 * stretch
+			const lens = this.els.lens
+			lens.setAttribute("x", (cx - r).toFixed(1))
+			lens.setAttribute("y", (cy - r).toFixed(1))
+			lens.setAttribute("width", (r * 2).toFixed(1))
+			lens.setAttribute("height", (r * 2).toFixed(1))
+			this.els.lensMap.setAttribute("scale", lensScale.toFixed(2))
+			if (!this.lensOn) {
+				this.els.content.style.filter = `url(#${this.els.lensFilterId})`
+				this.lensOn = true
+			}
+		} else if (this.lensOn) {
+			this.els.content.style.filter = ""
+			this.lensOn = false
 		}
 
-		const rot = this.bx * 0.06
-		this.els.inner.style.transform = `translate3d(${this.bx.toFixed(2)}px, ${this.by.toFixed(2)}px, 0) rotate(${rot.toFixed(3)}deg)`
-		// тень на «стене» смещается меньше самой капли — ощущение глубины
-		this.els.shadow.style.transform = `translate3d(${(this.bx * 0.45).toFixed(2)}px, ${(this.by * 0.45).toFixed(2)}px, 0)`
-		this.els.shadow.style.opacity = (0.75 + this.hover * 0.25).toFixed(3)
+		// весь компонент: сплющивание от нажатия + небольшой сдвиг за пальцем
+		const sq = this.press * 0.025
+		const bx = this.dragX * 0.1
+		const by = this.dragY * 0.1
+		this.els.inner.style.transform = `translate3d(${bx.toFixed(2)}px, ${(by - lift * 2).toFixed(2)}px, 0) scale(${(1 + sq).toFixed(4)}, ${(1 - sq).toFixed(4)})`
+		// содержимое «вплавлено» в материал — едет вслед за ним
+		this.els.content.style.transform = `translate3d(${(this.dragX * 0.12).toFixed(2)}px, ${(this.dragY * 0.12).toFixed(2)}px, 0)`
+		// тень: при подъёме — мягче и дальше, при нажатии — плотнее и ближе
+		const shadowY = lift * 6 - p * 6
+		this.els.shadow.style.transform = `translate3d(${(bx * 0.6).toFixed(2)}px, ${(by * 0.6 + shadowY).toFixed(2)}px, 0) scale(${(1 + p * 0.03).toFixed(3)})`
+		this.els.shadow.style.opacity = (0.8 + lift * 0.2 + p * 0.2).toFixed(3)
 	}
 
-	/** Ставит эллипс у того участка края, чья нормаль смотрит на (lx, ly) */
-	private placeHighlight(
+	/** Ставит эллипс у участка края, чья нормаль смотрит на (lx, ly) */
+	private placeOnEdge(
 		el: SVGEllipseElement,
 		lx: number,
 		ly: number,
@@ -397,10 +439,12 @@ export class Drop {
 		rx: number,
 		ry: number,
 		sharp: number,
-		along = 0,
 	) {
 		const { px, py } = this
 		const n = this.n
+		const ll = Math.hypot(lx, ly)
+		lx /= ll
+		ly /= ll
 		let sw = 0
 		let sx = 0
 		let sy = 0
@@ -429,24 +473,13 @@ export class Drop {
 		const nl = Math.hypot(snx, sny) || 1
 		snx /= nl
 		sny /= nl
-		// смещение внутрь и немного вдоль касательной
-		const cx = sx - snx * inset - sny * along
-		const cy = sy - sny * inset + snx * along
 		const ang = (Math.atan2(snx, -sny) * 180) / Math.PI
 		el.setAttribute(
 			"transform",
-			`translate(${cx.toFixed(1)} ${cy.toFixed(1)}) rotate(${ang.toFixed(1)})`,
+			`translate(${(sx - snx * inset).toFixed(1)} ${(sy - sny * inset).toFixed(1)}) rotate(${ang.toFixed(1)})`,
 		)
 		el.setAttribute("rx", rx.toFixed(1))
 		el.setAttribute("ry", ry.toFixed(1))
-	}
-
-	destroy() {
-		for (const r of this.ripples) {
-			r.ring.remove()
-			r.glow.remove()
-		}
-		this.ripples = []
 	}
 }
 
@@ -461,18 +494,40 @@ function arc(
 	return [cx + r * c, cy + r * s, c, s]
 }
 
-function setCircle(el: SVGCircleElement, x: number, y: number) {
-	el.setAttribute("cx", x.toFixed(1))
-	el.setAttribute("cy", y.toFixed(1))
+/** Карта смещений для «линзы» вмятины: R/G = направление от центра */
+let lensMapUrl: string | null = null
+export function getLensMap(): string {
+	if (lensMapUrl) return lensMapUrl
+	const S = 128
+	const cv = document.createElement("canvas")
+	cv.width = cv.height = S
+	const ctx = cv.getContext("2d")
+	if (!ctx) return ""
+	const img = ctx.createImageData(S, S)
+	for (let y = 0; y < S; y++) {
+		for (let x = 0; x < S; x++) {
+			const dx = (x + 0.5) / (S / 2) - 1
+			const dy = (y + 0.5) / (S / 2) - 1
+			const r = Math.hypot(dx, dy)
+			// вогнутая линза: содержимое расходится от центра, к краю эффект гаснет
+			const f = r < 1 ? Math.sin(Math.PI * r) * (1 - r) * 1.6 : 0
+			const ux = r > 0 ? dx / r : 0
+			const uy = r > 0 ? dy / r : 0
+			const o = (y * S + x) * 4
+			img.data[o] = 128 - ux * f * 127
+			img.data[o + 1] = 128 - uy * f * 127
+			img.data[o + 2] = 0
+			img.data[o + 3] = 255
+		}
+	}
+	ctx.putImageData(img, 0, 0)
+	lensMapUrl = cv.toDataURL()
+	return lensMapUrl
 }
 
-function clamp(x: number, a: number, b: number) {
-	return x < a ? a : x > b ? b : x
-}
+// ---------------- общий цикл ----------------
 
-// ---------------- общий цикл для всех капель ----------------
-
-const drops = new Set<Drop>()
+const items = new Set<Silicone>()
 let raf = 0
 let last = 0
 let lastY = 0
@@ -485,28 +540,28 @@ function frame(now: number) {
 	const y = window.scrollY
 	const vRaw = (y - lastY) / dt
 	lastY = y
-	const prevVel = velS
+	const prev = velS
 	velS += (vRaw - velS) * 0.3
-	accS += (clamp((velS - prevVel) / dt, -40000, 40000) - accS) * 0.3
+	accS += (Math.max(-40000, Math.min(40000, (velS - prev) / dt)) - accS) * 0.3
 
-	const t = now / 1000
 	let any = false
-	for (const d of drops) {
-		if (!d.visible) continue
-		any = true
-		d.step(dt, t, accS)
+	for (const it of items) {
+		if (!it.visible) continue
+		it.step(dt, accS)
+		if (it.busy) any = true
 	}
-	raf = any ? requestAnimationFrame(frame) : 0
+	// цикл живёт, пока что-то деформировано или страница скроллится
+	const scrolling = Math.abs(velS) > 5 || Math.abs(accS) > 50
+	raf = any || scrolling ? requestAnimationFrame(frame) : 0
 	if (!raf) last = 0
 }
 
-export function register(d: Drop) {
-	drops.add(d)
-	wake()
+export function register(it: Silicone) {
+	items.add(it)
 }
 
-export function unregister(d: Drop) {
-	drops.delete(d)
+export function unregister(it: Silicone) {
+	items.delete(it)
 }
 
 export function wake() {
@@ -514,4 +569,8 @@ export function wake() {
 		lastY = window.scrollY
 		raf = requestAnimationFrame(frame)
 	}
+}
+
+if (typeof window !== "undefined") {
+	window.addEventListener("scroll", wake, { passive: true })
 }

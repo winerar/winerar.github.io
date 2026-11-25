@@ -52,7 +52,7 @@ const Contact: React.FC = () => {
 						data-aos-delay={delay(index + 1)}
 						key={item.label}
 					>
-						<Liquid className="liquid--flat" seed={index + 7} strength={0.5}>
+						<Liquid className="liquid--flat" seed={index + 7} strength={0.7}>
 							<p className="mb-0">
 								{item.label}:{" "}
 								<a
